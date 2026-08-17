@@ -1,10 +1,18 @@
 import asyncio
+from pathlib import Path
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 from utils import storage
+
+TICKET_LOGO_PATH = Path(__file__).resolve().parent.parent / "assets" / "ticket_logo.png"
+
+DEFAULT_TICKET_MESSAGE = (
+    "Bonjour {membre}, merci de décrire ta demande ici.\n"
+    "Un membre de l'équipe va te répondre dès que possible."
+)
 
 
 def get_config(guild_id: int) -> dict:
@@ -128,12 +136,14 @@ class TicketPanelSelect(discord.ui.Select):
         }
         storage.save("tickets_open", open_tickets)
 
+        message_template = cat_info.get("message") or DEFAULT_TICKET_MESSAGE
+        description = message_template.replace("{membre}", interaction.user.mention).replace(
+            "{categorie}", value
+        )
+
         embed = discord.Embed(
             title=f"🎫 Ticket — {value}",
-            description=(
-                f"Bonjour {interaction.user.mention}, merci de décrire ta demande ici.\n"
-                "Un membre de l'équipe va te répondre dès que possible."
-            ),
+            description=description,
             color=discord.Color.green(),
         )
 
@@ -141,7 +151,16 @@ class TicketPanelSelect(discord.ui.Select):
         if ping_role:
             content += f" {ping_role.mention}"
 
-        await ticket_channel.send(content=content, embed=embed, view=TicketCloseView())
+        logo_file = None
+        if TICKET_LOGO_PATH.exists():
+            logo_file = discord.File(TICKET_LOGO_PATH, filename="logo.png")
+            embed.set_thumbnail(url="attachment://logo.png")
+
+        kwargs = {"content": content, "embed": embed, "view": TicketCloseView()}
+        if logo_file:
+            kwargs["file"] = logo_file
+
+        await ticket_channel.send(**kwargs)
         await interaction.followup.send(f"✅ Ton ticket a été créé : {ticket_channel.mention}", ephemeral=True)
 
 
@@ -213,6 +232,7 @@ class Tickets(commands.Cog):
         categorie="Catégorie Discord dans laquelle créer les salons de ticket",
         emoji="Emoji affiché dans le menu (optionnel)",
         description="Courte description affichée dans le menu (optionnel)",
+        message="Texte affiché dans le ticket à l'ouverture (optionnel). Utilise {membre} pour mentionner l'ouvreur.",
     )
     @app_commands.checks.has_permissions(manage_guild=True)
     async def ticket_add(
@@ -222,6 +242,7 @@ class Tickets(commands.Cog):
         categorie: discord.CategoryChannel,
         emoji: str = None,
         description: str = None,
+        message: str = None,
     ):
         conf = get_config(interaction.guild_id)
         conf.setdefault("categories", {})
@@ -230,6 +251,7 @@ class Tickets(commands.Cog):
             "discord_category_id": categorie.id,
             "emoji": emoji,
             "description": description,
+            "message": message,
             "ping_role_id": existing.get("ping_role_id"),
         }
         save_config(interaction.guild_id, conf)
@@ -245,6 +267,7 @@ class Tickets(commands.Cog):
         categorie="Nouvelle catégorie Discord (optionnel)",
         emoji="Nouvel emoji (optionnel)",
         description="Nouvelle description (optionnel)",
+        message="Nouveau texte affiché dans le ticket (optionnel). Utilise {membre} pour mentionner l'ouvreur.",
     )
     @app_commands.autocomplete(nom=category_name_autocomplete)
     @app_commands.checks.has_permissions(manage_guild=True)
@@ -255,6 +278,7 @@ class Tickets(commands.Cog):
         categorie: discord.CategoryChannel = None,
         emoji: str = None,
         description: str = None,
+        message: str = None,
     ):
         conf = get_config(interaction.guild_id)
         cat = conf.get("categories", {}).get(nom)
@@ -268,6 +292,8 @@ class Tickets(commands.Cog):
             cat["emoji"] = emoji
         if description:
             cat["description"] = description
+        if message:
+            cat["message"] = message
 
         save_config(interaction.guild_id, conf)
         await interaction.response.send_message(
